@@ -69,12 +69,9 @@ jobs:
               for x in range(width):
                   dx, dy = x - cx, y - cy
                   d2 = dx * dx + dy * dy
-                  # Dark navy base.
                   r, g, b = 7, 17, 28
-                  # Warm sun disc.
                   if d2 < 250 * 250:
                       r, g, b = 255, 183, 3
-                  # Simple white shield silhouette over the sun.
                   shield = (abs(dx) < 125 and -120 < dy < 105 and
                             (dy < -35 or abs(dx) < 125 - int((dy + 35) * 0.72)))
                   if shield:
@@ -99,6 +96,11 @@ jobs:
           git config user.name "SunShield iOS Builder"
           git config user.email "actions@users.noreply.github.com"
           git add ios package-lock.json
+          # Capacitor ignores these generated files by default, but they are
+          # required so the checked-out Xcode project contains the real app.
+          git add -f ios/App/App/public
+          git add -f ios/App/App/capacitor.config.json
+          git add -f ios/App/App/config.xml
           if git diff --cached --quiet; then
             echo "iOS project is already up to date."
           else
