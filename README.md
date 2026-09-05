@@ -1,18 +1,23 @@
 # SunShield ☀️🚗
 
-SunShield recommends which side of the car to sit on for an **entire trip**, based on the route and the predicted position of the sun.
+SunShield recommends which side of the car to sit on for an **entire trip**, based on the driving route and the predicted position of the sun. The main use case is reducing direct sunlight and screen glare while travelling.
 
-## V0.2
+## V1.0
 
-- Current-location GPS
-- Destination search and autocomplete
+- Optional current-location GPS
+- Australian destination search and autocomplete
 - Real driving route calculation
 - Interactive route map
 - Per-segment vehicle heading
 - Sun azimuth + altitude prediction at the time each segment is reached
-- Weighted left/right exposure score
-- One whole-trip recommendation: **SIT LEFT**, **SIT RIGHT**, or **EITHER SIDE**
-- Mobile-first UI
+- Weighted left/right side-window exposure score
+- Whole-trip recommendation: **SIT LEFT**, **SIT RIGHT**, or **EITHER SIDE**
+- Explanation of why a side was chosen
+- Journey, daylight, side-change and sun-position breakdowns
+- Mobile-first UI with iPhone safe-area handling
+- Public privacy policy and support pages for App Store submission
+
+See [RELEASE_NOTES.md](./RELEASE_NOTES.md) for the 1.0 release summary.
 
 ## Run locally
 
@@ -25,25 +30,30 @@ Then open `http://localhost:3000`.
 
 ## Web deployment
 
-Import this repository into Vercel. No environment variables are required for V0.2.
+The app is compatible with static hosting. No environment variables are currently required.
+
+Public pages include:
+
+- `/privacy/`
+- `/support/`
 
 ## iOS / App Store
 
-The `ios-app` branch is configured as a real Capacitor iOS app using bundle ID:
+Sun Shield is configured as a Capacitor iOS app using bundle ID:
 
 ```text
 com.jake.sunshield
 ```
 
-The web app is statically exported and bundled inside the iOS app rather than simply opening the Vercel site.
+The web app is statically exported and bundled inside the iOS app rather than simply opening a hosted website.
 
-A GitHub Actions workflow on this branch installs dependencies, builds the static app, generates the native Xcode project, adds the iOS location permission text, applies Sun Shield app artwork, and commits the generated `ios/` project back to the branch.
-
-After the workflow finishes, the native project is at:
+The native project is located at:
 
 ```text
 ios/App/App.xcodeproj
 ```
+
+The iOS marketing version is **1.0**. The TestFlight lane increments the build number before upload.
 
 For future web changes, run:
 
@@ -51,8 +61,10 @@ For future web changes, run:
 npm run ios:sync
 ```
 
-or let the branch workflow regenerate the iOS project.
+## Map and routing services
 
-## Prototype services
+Sun Shield currently uses OpenStreetMap Nominatim for place search and the public OSRM routing service for route calculation. This is workable for testing and a small initial release, but meaningful production scale should move to a provider or infrastructure with appropriate reliability and usage limits.
 
-V0.2 uses OpenStreetMap Nominatim for destination geocoding and the public OSRM routing service for route calculation. These are suitable for early testing; a production release should move to a dedicated routing/geocoding provider with appropriate usage limits and reliability guarantees.
+## Privacy
+
+Sun Shield does not create user accounts or store location history. See [PRIVACY.md](./PRIVACY.md) for the full policy.
