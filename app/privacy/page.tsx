@@ -58,7 +58,7 @@ export default function PrivacyPolicyPage() {
 
         <h2>Children</h2>
         <p>
-          Sun Shield does not knowingly collect personal information from children. The app does not require an account or profile.
+          Sun Shield itself does not collect or store personal information from any users, including children. The app does not require an account or profile.
         </p>
 
         <h2>Changes to this policy</h2>
