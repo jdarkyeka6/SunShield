@@ -6,8 +6,16 @@ import RouteMap from './RouteMap';
 
 type Point = { lat: number; lon: number };
 type SearchResult = Point & { name: string; shortName: string };
+type Side = 'LEFT' | 'RIGHT' | 'EITHER';
+
+type SunSnapshot = {
+  azimuth: number;
+  altitude: number;
+  direction: string;
+};
+
 type Analysis = {
-  seat: 'LEFT' | 'RIGHT' | 'EITHER';
+  seat: Side;
   left: number;
   right: number;
   advantage: number;
@@ -18,11 +26,26 @@ type Analysis = {
   route: [number, number][];
   start: Point;
   end: Point;
+  departureLabel: string;
+  arrivalLabel: string;
+  daylightMin: number;
+  leftSunMin: number;
+  rightSunMin: number;
+  frontSunMin: number;
+  backSunMin: number;
+  sideSwitches: number;
+  strongestSide: Side;
+  strongestMinute: number;
+  strongestAltitude: number;
+  confidence: 'Balanced' | 'Fair' | 'Strong' | 'Very strong';
+  startSun: SunSnapshot;
+  endSun: SunSnapshot;
 };
 
 const rad = (n: number) => (n * Math.PI) / 180;
 const deg = (n: number) => (n * 180) / Math.PI;
 const norm180 = (n: number) => ((n + 540) % 360) - 180;
+const round1 = (n: number) => Math.round(n * 10) / 10;
 
 function bearing(a: Point, b: Point) {
   const y = Math.sin(rad(b.lon - a.lon)) * Math.cos(rad(b.lat));
@@ -31,11 +54,19 @@ function bearing(a: Point, b: Point) {
   return (deg(Math.atan2(y, x)) + 360) % 360;
 }
 
-function sunBearing(date: Date, p: Point) {
+function compassDirection(azimuth: number) {
+  const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return directions[Math.round(azimuth / 45) % 8];
+}
+
+function sunBearing(date: Date, p: Point): SunSnapshot {
   const pos = SunCalc.getPosition(date, p.lat, p.lon);
+  const azimuth = (deg(pos.azimuth) + 180 + 360) % 360;
+  const altitude = deg(pos.altitude);
   return {
-    azimuth: (deg(pos.azimuth) + 180 + 360) % 360,
-    altitude: deg(pos.altitude)
+    azimuth,
+    altitude,
+    direction: compassDirection(azimuth)
   };
 }
 
@@ -44,6 +75,17 @@ function exposureFor(relative: number, altitude: number, seconds: number) {
   const sideFactor = Math.max(0, Math.sin(rad(Math.abs(relative))));
   const altitudeFactor = Math.max(0.15, Math.cos(rad(Math.min(85, altitude))));
   return seconds * sideFactor * altitudeFactor;
+}
+
+function timeLabel(date: Date) {
+  return date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function confidenceFor(advantage: number, daylightMin: number): Analysis['confidence'] {
+  if (daylightMin < 1 || advantage < 12) return 'Balanced';
+  if (advantage < 25) return 'Fair';
+  if (advantage < 45) return 'Strong';
+  return 'Very strong';
 }
 
 function toSearchResult(item: any): SearchResult {
@@ -107,9 +149,22 @@ function analyseRoute(route: any, origin: string, destination: string, start: Po
   const coords: [number, number][] = route.geometry.coordinates;
   const durations: number[] = route.legs?.[0]?.annotation?.duration ?? [];
   const startTime = Date.now();
+  const arrivalTime = startTime + route.duration * 1000;
+
   let elapsed = 0;
   let left = 0;
   let right = 0;
+  let daylightSeconds = 0;
+  let leftSunSeconds = 0;
+  let rightSunSeconds = 0;
+  let frontSunSeconds = 0;
+  let backSunSeconds = 0;
+  let sideSwitches = 0;
+  let previousSide: 'LEFT' | 'RIGHT' | null = null;
+  let strongestScore = 0;
+  let strongestSide: Side = 'EITHER';
+  let strongestMinute = 0;
+  let strongestAltitude = 0;
 
   for (let i = 0; i < coords.length - 1; i++) {
     const a = { lon: coords[i][0], lat: coords[i][1] };
@@ -122,28 +177,75 @@ function analyseRoute(route: any, origin: string, destination: string, start: Po
     const relative = norm180(sun.azimuth - heading);
     const exposure = exposureFor(relative, sun.altitude, seconds);
 
-    if (relative > 0) right += exposure;
-    else if (relative < 0) left += exposure;
+    if (sun.altitude > 0) {
+      daylightSeconds += seconds;
+
+      if (Math.abs(relative) <= 35) {
+        frontSunSeconds += seconds;
+      } else if (Math.abs(relative) >= 145) {
+        backSunSeconds += seconds;
+      }
+
+      const currentSide: 'LEFT' | 'RIGHT' = relative > 0 ? 'RIGHT' : 'LEFT';
+      if (currentSide === 'RIGHT') {
+        rightSunSeconds += seconds;
+        right += exposure;
+      } else {
+        leftSunSeconds += seconds;
+        left += exposure;
+      }
+
+      if (Math.abs(relative) >= 20 && Math.abs(relative) <= 160) {
+        if (previousSide && previousSide !== currentSide) sideSwitches += 1;
+        previousSide = currentSide;
+      }
+
+      const intensity = seconds > 0 ? exposure / seconds : 0;
+      if (intensity > strongestScore) {
+        strongestScore = intensity;
+        strongestSide = currentSide;
+        strongestMinute = Math.max(0, Math.round((elapsed + seconds / 2) / 60));
+        strongestAltitude = Math.round(sun.altitude);
+      }
+    }
+
     elapsed += seconds;
   }
 
   const total = left + right;
   const difference = total ? Math.abs(left - right) / total : 0;
-  let seat: Analysis['seat'] = 'EITHER';
+  const advantage = Math.round(difference * 100);
+  const daylightMin = Math.round(daylightSeconds / 60);
+
+  let seat: Side = 'EITHER';
   if (total > 1 && difference >= 0.12) seat = left < right ? 'LEFT' : 'RIGHT';
 
   return {
     seat,
     left,
     right,
-    advantage: Math.round(difference * 100),
+    advantage,
     durationMin: Math.round(route.duration / 60),
-    distanceKm: Math.round((route.distance / 1000) * 10) / 10,
+    distanceKm: round1(route.distance / 1000),
     origin,
     destination,
     route: coords,
     start,
-    end
+    end,
+    departureLabel: timeLabel(new Date(startTime)),
+    arrivalLabel: timeLabel(new Date(arrivalTime)),
+    daylightMin,
+    leftSunMin: Math.round(leftSunSeconds / 60),
+    rightSunMin: Math.round(rightSunSeconds / 60),
+    frontSunMin: Math.round(frontSunSeconds / 60),
+    backSunMin: Math.round(backSunSeconds / 60),
+    sideSwitches,
+    strongestSide,
+    strongestMinute,
+    strongestAltitude,
+    confidence: confidenceFor(advantage, daylightMin),
+    startSun: sunBearing(new Date(startTime), start),
+    endSun: sunBearing(new Date(arrivalTime), end)
   };
 }
 
@@ -232,6 +334,11 @@ function usePlaceSuggestions(value: string, selected: SearchResult | null) {
   return { items, searching };
 }
 
+function sunStatus(snapshot: SunSnapshot) {
+  if (snapshot.altitude <= 0) return `below the horizon toward ${snapshot.direction}`;
+  return `${Math.round(snapshot.altitude)}° high toward ${snapshot.direction}`;
+}
+
 export default function Home() {
   const [originText, setOriginText] = useState('');
   const [destinationText, setDestinationText] = useState('');
@@ -254,6 +361,40 @@ export default function Home() {
       right: Math.round((analysis.right / total) * 100)
     };
   }, [analysis]);
+
+  const explanation = useMemo(() => {
+    if (!analysis) return [];
+    if (analysis.daylightMin < 1) {
+      return [
+        'The sun is below the horizon for essentially the whole drive, so neither side has a meaningful sun advantage.',
+        'SunShield still checks every route segment, but there is not enough direct sunlight to prefer one seat.'
+      ];
+    }
+
+    if (analysis.seat === 'EITHER') {
+      return [
+        `The weighted exposure is close: ${percentages.left}% left versus ${percentages.right}% right.`,
+        analysis.sideSwitches > 0
+          ? `The sunny side changes ${analysis.sideSwitches} ${analysis.sideSwitches === 1 ? 'time' : 'times'}, which helps the two sides balance out.`
+          : 'Neither side keeps a large enough advantage across the whole route.',
+        'SunShield only makes a left/right call when the difference is large enough to be useful.'
+      ];
+    }
+
+    const sunnySide = analysis.seat === 'LEFT' ? 'right' : 'left';
+    const sunnyPercent = analysis.seat === 'LEFT' ? percentages.right : percentages.left;
+    const safePercent = analysis.seat === 'LEFT' ? percentages.left : percentages.right;
+
+    return [
+      `The ${sunnySide} side receives about ${sunnyPercent}% of the route's weighted side-window sun, versus ${safePercent}% on the recommended side.`,
+      analysis.strongestSide !== 'EITHER'
+        ? `The strongest side-window hit is around ${analysis.strongestMinute} min into the trip, on the ${analysis.strongestSide.toLowerCase()} side, with the sun about ${analysis.strongestAltitude}° above the horizon.`
+        : 'There is no single strong side-window sun segment on this trip.',
+      analysis.sideSwitches > 0
+        ? `The sun changes sides ${analysis.sideSwitches} ${analysis.sideSwitches === 1 ? 'time' : 'times'}, but the ${sunnySide} side still comes out sunnier overall.`
+        : `The route keeps the sun biased toward the ${sunnySide} side for most of the useful daylight segments.`
+    ];
+  }, [analysis, percentages]);
 
   const canSubmit = destinationText.trim().length > 0 && (useCurrent || originText.trim().length > 0);
 
@@ -308,7 +449,7 @@ export default function Home() {
           <div className="heroCard">
             <div className="eyebrow">ONE SEAT. WHOLE TRIP.</div>
             <h2>Where are you going?</h2>
-            <p className="muted">Choose a start and destination. Current location is optional.</p>
+            <p className="muted">SunShield follows the actual driving route and tracks where the sun will be as you move.</p>
 
             <form onSubmit={submit}>
               <PlaceInput
@@ -364,6 +505,11 @@ export default function Home() {
               </button>
             </form>
             {error && <div className="error">{error}</div>}
+
+            <div className="miniExplainer">
+              <span>☀️</span>
+              <p><b>What it checks</b><small>Road direction, sun direction, sun height and the time you reach each part of the route.</small></p>
+            </div>
             <p className="privacyHint">SunShield does not require GPS. Type both locations if you prefer.</p>
           </div>
         ) : (
@@ -375,35 +521,94 @@ export default function Home() {
               <strong>{analysis.seat === 'EITHER' ? 'EITHER SIDE' : `SIT ${analysis.seat}`}</strong>
             </div>
             <p className="reason">
-              {analysis.seat === 'EITHER'
-                ? 'Sun exposure is too similar to make one side worth choosing.'
-                : `${analysis.advantage}% stronger overall recommendation for the ${analysis.seat.toLowerCase()} side.`}
+              {analysis.daylightMin < 1
+                ? 'The sun is below the horizon for essentially the whole trip.'
+                : analysis.seat === 'EITHER'
+                  ? 'Both sides are close enough that swapping seats is not worth it.'
+                  : `${analysis.confidence} recommendation · ${analysis.advantage}% overall advantage for the ${analysis.seat.toLowerCase()} side.`}
             </p>
 
-            <div className="stats">
+            <div className="stats three">
               <div><span>🚗</span><b>{analysis.durationMin} min</b><small>journey</small></div>
               <div><span>📏</span><b>{analysis.distanceKm} km</b><small>route</small></div>
+              <div><span>☀️</span><b>{analysis.daylightMin} min</b><small>sun above horizon</small></div>
             </div>
+
+            <section className="whyCard">
+              <div className="sectionTitle">
+                <div><span>WHY?</span><b>Why SunShield picked this</b></div>
+                <i>{analysis.confidence}</i>
+              </div>
+              <div className="whyList">
+                {explanation.map((item, i) => (
+                  <p key={item}><span>{i + 1}</span>{item}</p>
+                ))}
+              </div>
+            </section>
+
+            <section className="sunBreakdown">
+              <div className="sectionTitle">
+                <div><span>SUN BREAKDOWN</span><b>What happens during the drive</b></div>
+              </div>
+              <div className="detailGrid">
+                <div><span>←</span><b>{analysis.leftSunMin} min</b><small>sun on left side</small></div>
+                <div><span>→</span><b>{analysis.rightSunMin} min</b><small>sun on right side</small></div>
+                <div><span>↔</span><b>{analysis.sideSwitches}</b><small>side {analysis.sideSwitches === 1 ? 'change' : 'changes'}</small></div>
+                <div><span>⬆</span><b>{analysis.frontSunMin} min</b><small>sun mostly ahead</small></div>
+              </div>
+            </section>
 
             <div className="mapSection">
               <div className="mapHeading"><b>Your route</b><span>Drag or zoom the map</span></div>
               <RouteMap route={analysis.route} start={analysis.start} end={analysis.end} />
             </div>
 
-            <div className="exposure">
-              <div className="barRow"><span>LEFT</span><div className="bar"><i style={{ width: `${percentages.left}%` }} /></div><b>{percentages.left}%</b></div>
-              <div className="barRow"><span>RIGHT</span><div className="bar"><i style={{ width: `${percentages.right}%` }} /></div><b>{percentages.right}%</b></div>
-            </div>
+            <section className="exposureCard">
+              <div className="sectionTitle">
+                <div><span>WEIGHTED EXPOSURE</span><b>Which side gets more direct side-window sun?</b></div>
+              </div>
+              <div className="exposure">
+                <div className="barRow"><span>LEFT</span><div className="bar"><i style={{ width: `${percentages.left}%` }} /></div><b>{percentages.left}%</b></div>
+                <div className="barRow"><span>RIGHT</span><div className="bar"><i style={{ width: `${percentages.right}%` }} /></div><b>{percentages.right}%</b></div>
+              </div>
+              <p className="microCopy">This is not just minutes. SunShield weights each route segment by sun angle and height, so a low sun hitting a side window matters more than weak side exposure.</p>
+            </section>
+
+            <section className="sunPath">
+              <div className="sectionTitle">
+                <div><span>SUN POSITION</span><b>Departure to arrival</b></div>
+              </div>
+              <div className="timeline">
+                <div>
+                  <span className="timeDot">A</span>
+                  <p><small>{analysis.departureLabel} · DEPART</small><b>Sun {sunStatus(analysis.startSun)}</b></p>
+                </div>
+                <div>
+                  <span className="timeDot">B</span>
+                  <p><small>{analysis.arrivalLabel} · ARRIVE</small><b>Sun {sunStatus(analysis.endSun)}</b></p>
+                </div>
+              </div>
+            </section>
 
             <div className="tripPlaces">
               <p><span>A</span><small>FROM</small><b>{analysis.origin}</b></p>
               <p><span>B</span><small>TO</small><b>{analysis.destination}</b></p>
             </div>
+
+            <details className="method">
+              <summary>How does SunShield work?</summary>
+              <div>
+                <p>SunShield breaks the driving route into small segments. For each segment it estimates when you will reach it, calculates the vehicle heading, and calculates the sun's azimuth and altitude at that location and time.</p>
+                <p>It then works out whether the sun is to the left or right of the car and weights the segment by how directly the sun hits a side window. The whole route is combined into one recommendation.</p>
+                <p><b>Reality check:</b> buildings, trees, clouds, tunnels, window tint and the exact road lane are not modelled yet. This predicts sun direction, not UV dose or medical sun safety.</p>
+              </div>
+            </details>
+
             <p className="note">One recommendation for the whole route. No mid-trip seat swapping.</p>
           </div>
         )}
 
-        <footer>SunShield V0.2 · Route, map + sun analysis.</footer>
+        <footer>SunShield V0.3 · Route + time + sun-angle analysis.</footer>
       </section>
     </main>
   );
