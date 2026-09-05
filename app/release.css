@@ -1,0 +1,22 @@
+/* SunShield 1.0 release overrides. Keep these small and isolated so the V0.3 UI stays stable. */
+
+.shell > footer {
+  font-size: 0;
+}
+
+.shell > footer::after {
+  content: 'SunShield V1.0 · Route + time + sun-angle analysis.';
+  font-size: 12px;
+}
+
+@supports (padding: max(0px)) {
+  .shell {
+    padding-bottom: max(24px, env(safe-area-inset-bottom));
+  }
+}
+
+button,
+input,
+summary {
+  -webkit-tap-highlight-color: transparent;
+}
