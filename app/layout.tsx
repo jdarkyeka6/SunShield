@@ -1,10 +1,11 @@
 import './globals.css';
+import './release.css';
 import 'leaflet/dist/leaflet.css';
 import type { Metadata, Viewport } from 'next';
 
 export const metadata: Metadata = {
   title: 'SunShield',
-  description: 'Pick the cooler side of the car before the trip starts.'
+  description: 'Plan the side of the car with less direct sun and screen glare for your route.'
 };
 
 export const viewport: Viewport = {
